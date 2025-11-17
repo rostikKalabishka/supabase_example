@@ -1,4 +1,3 @@
-// lib/service/auth_service.dart
 import 'dart:developer';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -15,7 +14,7 @@ class AuthService {
     required String password,
   }) async {
     return await _supabase.auth.signInWithPassword(
-      email: email,
+      email: email.trim(),
       password: password,
     );
   }
@@ -26,13 +25,13 @@ class AuthService {
     String? fullName,
   }) async {
     final response = await _supabase.auth.signUp(
-      email: email,
+      email: email.trim(),
       password: password,
       data: {'full_name': fullName ?? email.split('@').first},
     );
 
-    // If email confirmation is disabled — create profile immediately
-    if (response.user != null && response.session != null) {
+    // Create profile immediately if session exists (email confirmation disabled)
+    if (response.session != null && response.user != null) {
       await _createProfileIfNotExists(response.user!);
     }
 
@@ -40,10 +39,9 @@ class AuthService {
   }
 
   Future<void> signOut() async => await _supabase.auth.signOut();
-
   User? getCurrentUser() => _supabase.auth.currentUser;
 
-  // ==================== PROFILE CREATION ====================
+  // ==================== PROFILE CREATION (SAFE) ====================
   Future<void> _createProfileIfNotExists(User user) async {
     try {
       final exists = await _supabase
@@ -55,8 +53,8 @@ class AuthService {
       if (exists == null) {
         await _supabase.from('profiles').insert({
           'id': user.id,
-          'phone_number': user.phone,
           'email': user.email,
+          'phone_number': user.phone?.isNotEmpty == true ? user.phone : null,
           'full_name':
               user.userMetadata?['full_name'] ??
               user.email?.split('@').first ??
@@ -64,129 +62,220 @@ class AuthService {
         });
       }
     } catch (e) {
-      log('Profile creation fallback error: $e');
+      log('Profile creation error: $e');
     }
   }
 
-  // ==================== USER SEARCH ====================
+  // ==================== USER SEARCH (FIXED & OPTIMIZED) ====================
   Future<List<Map<String, dynamic>>> searchUsers(String query) async {
     if (query.trim().isEmpty) return [];
 
     final cleaned = query.trim();
 
-    final response = await _supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url, phone_number, email')
-        .or(
-          'phone_number.ilike.%$cleaned%,full_name.ilike.%$cleaned%, email.ilike.%$cleaned%',
-        )
-        .neq('id', _supabase.auth.currentUser?.id ?? '');
+    try {
+      final response = await _supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url, phone_number, email')
+          .or(
+            'phone_number.ilike.%$cleaned%,'
+            'full_name.ilike.%$cleaned%,'
+            'email.ilike.%$cleaned%',
+          )
+          .neq('id', _supabase.auth.currentUser?.id ?? '');
 
-    return List<Map<String, dynamic>>.from(response);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      log('Search error: $e');
+      return [];
+    }
   }
 
   // ==================== CONTACTS ====================
   Future<void> addContact(String contactUserId) async {
     final userId = _supabase.auth.currentUser?.id;
-    if (userId == null) throw Exception('Not authenticated');
+    if (userId == null) throw Exception('User not authenticated');
+    if (userId == contactUserId) throw Exception('Cannot add yourself');
 
-    await _supabase.from('contacts').insert({
-      'user_id': userId,
-      'contact_id': contactUserId,
-    });
+    try {
+      await _supabase.from('contacts').insert({
+        'user_id': userId,
+        'contact_id': contactUserId,
+      });
+    } on PostgrestException catch (e) {
+      if (e.code == '23505') {
+        throw Exception('Contact already added');
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> getCurrentProfile() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return null;
 
-    final data = await _supabase
-        .from('profiles')
-        .select()
-        .eq('id', userId)
-        .maybeSingle();
+    try {
+      final data = await _supabase
+          .from('profiles')
+          .select()
+          .eq('id', userId)
+          .maybeSingle();
 
-    return data;
+      return data;
+    } catch (e) {
+      log('getCurrentProfile error: $e');
+      return null;
+    }
   }
 
   Future<List<Map<String, dynamic>>> getMyContacts() async {
     final userId = _supabase.auth.currentUser?.id;
     if (userId == null) return [];
 
-    // First, get all contact IDs
-    final contactsResponse = await _supabase
-        .from('contacts')
-        .select('contact_id')
-        .eq('user_id', userId);
+    try {
+      final contactsResponse = await _supabase
+          .from('contacts')
+          .select('contact_id')
+          .eq('user_id', userId);
 
-    if (contactsResponse.isEmpty) return [];
+      if (contactsResponse.isEmpty) return [];
 
-    final List<String> contactIds = contactsResponse
-        .map((e) => e['contact_id'] as String)
-        .toList();
+      final List<String> contactIds = contactsResponse
+          .map((e) => e['contact_id'] as String)
+          .toList();
 
-    // Then fetch all contact profiles in one query
-    final profilesResponse = await _supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url, phone_number')
-        .inFilter('id', contactIds);
+      final profilesResponse = await _supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url, phone_number')
+          .inFilter('id', contactIds);
 
-    return List<Map<String, dynamic>>.from(profilesResponse);
+      return List<Map<String, dynamic>>.from(profilesResponse);
+    } catch (e) {
+      log('getMyContacts error: $e');
+      return [];
+    }
   }
 
+  // ==================== PROFILE UPDATE ====================
   Future<void> updateProfile({required String fullName, String? phone}) async {
     final userId = _supabase.auth.currentUser?.id;
-    if (userId == null) return;
+    if (userId == null) throw Exception('Not authenticated');
 
     await _supabase
         .from('profiles')
         .update({
-          'full_name': fullName,
-          'phone': phone,
+          'full_name': fullName.trim().isEmpty ? null : fullName.trim(),
+          'phone_number': phone?.trim().isEmpty == true ? null : phone?.trim(),
           'updated_at': DateTime.now().toIso8601String(),
         })
         .eq('id', userId);
   }
 
-  // ==================== AVATAR UPLOAD ====================
+  // ==================== AVATAR UPLOAD (FIXED PATH) ====================
   Future<String?> uploadAvatar() async {
     final picker = ImagePicker();
-    final picked = await picker.pickImage(
+    final pickedFile = await picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 85,
     );
-    if (picked == null) return null;
+    if (pickedFile == null) return null;
 
-    final cropped = await ImageCropper().cropImage(
-      sourcePath: picked.path,
+    final croppedFile = await ImageCropper().cropImage(
+      sourcePath: pickedFile.path,
       aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
+      compressQuality: 85,
       uiSettings: [
         AndroidUiSettings(
-          toolbarTitle: 'Crop',
+          toolbarTitle: 'Crop Image',
           toolbarColor: Colors.deepPurple,
           toolbarWidgetColor: Colors.white,
           lockAspectRatio: true,
         ),
-        IOSUiSettings(title: 'Crop'),
+        IOSUiSettings(title: 'Crop Image'),
       ],
     );
-    if (cropped == null) return null;
+    if (croppedFile == null) return null;
 
-    final file = File(cropped.path);
+    final file = File(croppedFile.path);
     final userId = _supabase.auth.currentUser!.id;
-    final path = '$userId/avatar.jpg';
+    final filePath = 'avatars/$userId/avatar.jpg';
 
-    await _supabase.storage
-        .from('avatars')
-        .upload(path, file, fileOptions: const FileOptions(upsert: true));
+    try {
+      await _supabase.storage
+          .from('avatars')
+          .upload(filePath, file, fileOptions: const FileOptions(upsert: true));
 
-    final url = _supabase.storage.from('avatars').getPublicUrl(path);
+      final publicUrl = _supabase.storage
+          .from('avatars')
+          .getPublicUrl(filePath);
 
-    await _supabase
-        .from('profiles')
-        .update({'avatar_url': url})
-        .eq('id', userId);
+      await _supabase
+          .from('profiles')
+          .update({'avatar_url': publicUrl})
+          .eq('id', userId);
 
-    return url;
+      return publicUrl;
+    } catch (e) {
+      log('Avatar upload error: $e');
+      return null;
+    }
+  }
+
+  // ==================== OTP (Email & Phone) ====================
+
+  Future<void> signInWithOtp(String email) async {
+    try {
+      await _supabase.auth.signInWithOtp(
+        email: email.trim(),
+        // options: AuthOptions(redirectTo: 'io.supabase.flutter://login-callback/'),
+      );
+    } catch (e) {
+      log(e.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> signInWithPhoneOtp(String phone) async {
+    // final formattedPhone = phone.trim().startsWith('+')
+    //     ? phone.trim()
+    //     : 'phone';
+    try {
+      await _supabase.auth.signInWithOtp(
+        phone: phone.trim(),
+        //  redirectTo: 'io.supabase.flutter://login-callback/',
+      );
+    } catch (e) {
+      log(e.toString());
+      rethrow;
+    }
+  }
+
+  /// Перевіряє OTP код (для email і телефону)
+  Future<AuthResponse> verifyOtp({
+    required String token,
+    required String type, // 'email' або 'sms'
+    String? email,
+    String? phone,
+  }) async {
+    try {
+      final otpType = type == 'email' ? OtpType.email : OtpType.sms;
+
+      final response = await _supabase.auth.verifyOTP(
+        token: token,
+        phone: phone,
+        email: email,
+        // type: otpType,
+        type: OtpType.sms,
+        //redirectTo: 'io.supabase.flutter://login-callback/',
+      );
+
+      if (response.user != null && response.session != null) {
+        await _createProfileIfNotExists(response.user!);
+      }
+
+      return response;
+    } catch (e) {
+      log(e.toString());
+      rethrow;
+    }
   }
 }

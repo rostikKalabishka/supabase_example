@@ -2,6 +2,7 @@
 import 'dart:developer';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_example/otp_login_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'service/auth_service.dart';
 
@@ -249,7 +250,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final profile = await _auth.getCurrentProfile();
     if (profile != null) {
       _nameController.text = profile['full_name'] ?? '';
-      _phoneController.text = profile['phone'] ?? '';
+      _phoneController.text = profile['phone_number'] ?? '';
       _avatarUrl = profile['avatar_url'];
       setState(() {});
     }
@@ -432,6 +433,19 @@ class _LoginScreenState extends State<LoginScreen> {
                         : "Already have an account? Sign in",
                   ),
                 ),
+
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OtpLoginScreen()),
+                  ),
+                  child: const Text('Login with OTP (Email/Phone)'),
+                ),
+                // TextButton(
+                //   onPressed: () => _auth.signInWithGoogle(),
+                //   child: const Text('Continue with Google'),
+                // ),
               ],
             ),
           ),
