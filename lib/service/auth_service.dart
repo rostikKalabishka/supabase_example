@@ -55,7 +55,8 @@ class AuthService {
       if (exists == null) {
         await _supabase.from('profiles').insert({
           'id': user.id,
-          'user_email': user.email,
+          'phone_number': user.phone,
+          'email': user.email,
           'full_name':
               user.userMetadata?['full_name'] ??
               user.email?.split('@').first ??
@@ -75,8 +76,10 @@ class AuthService {
 
     final response = await _supabase
         .from('profiles')
-        .select('id, full_name, avatar_url, phone')
-        .or('phone.ilike.%$cleaned%,full_name.ilike.%$cleaned%')
+        .select('id, full_name, avatar_url, phone_number, email')
+        .or(
+          'phone_number.ilike.%$cleaned%,full_name.ilike.%$cleaned%, email.ilike.%$cleaned%',
+        )
         .neq('id', _supabase.auth.currentUser?.id ?? '');
 
     return List<Map<String, dynamic>>.from(response);
@@ -125,7 +128,7 @@ class AuthService {
     // Then fetch all contact profiles in one query
     final profilesResponse = await _supabase
         .from('profiles')
-        .select('id, full_name, avatar_url, phone')
+        .select('id, full_name, avatar_url, phone_number')
         .inFilter('id', contactIds);
 
     return List<Map<String, dynamic>>.from(profilesResponse);
