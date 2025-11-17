@@ -250,7 +250,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final profile = await _auth.getCurrentProfile();
     if (profile != null) {
       _nameController.text = profile['full_name'] ?? '';
-      _phoneController.text = profile['phone_number'] ?? '';
+      _phoneController.text = profile['phone'] ?? '';
       _avatarUrl = profile['avatar_url'];
       setState(() {});
     }

@@ -27,7 +27,7 @@ class AuthService {
     final response = await _supabase.auth.signUp(
       email: email.trim(),
       password: password,
-      data: {'full_name': fullName ?? email.split('@').first},
+      data: {'full_name': fullName ?? email.split('@').first, 'email': email},
     );
 
     // Create profile immediately if session exists (email confirmation disabled)
@@ -54,7 +54,7 @@ class AuthService {
         await _supabase.from('profiles').insert({
           'id': user.id,
           'email': user.email,
-          'phone_number': user.phone?.isNotEmpty == true ? user.phone : null,
+          'phone': user.phone?.isNotEmpty == true ? user.phone : null,
           'full_name':
               user.userMetadata?['full_name'] ??
               user.email?.split('@').first ??
@@ -68,26 +68,25 @@ class AuthService {
 
   // ==================== USER SEARCH (FIXED & OPTIMIZED) ====================
   Future<List<Map<String, dynamic>>> searchUsers(String query) async {
-    if (query.trim().isEmpty) return [];
+    final q = query.trim();
+    if (q.isEmpty) return [];
 
-    final cleaned = query.trim();
+    final currentUserId = _supabase.auth.currentUser?.id;
+    if (currentUserId == null) return [];
 
-    try {
-      final response = await _supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, phone_number, email')
-          .or(
-            'phone_number.ilike.%$cleaned%,'
-            'full_name.ilike.%$cleaned%,'
-            'email.ilike.%$cleaned%',
-          )
-          .neq('id', _supabase.auth.currentUser?.id ?? '');
+    final filters = [
+      'phone.ilike.%$q%',
+      'full_name.ilike.%$q%',
+      'email.ilike.%$q%',
+    ];
 
-      return List<Map<String, dynamic>>.from(response);
-    } catch (e) {
-      log('Search error: $e');
-      return [];
-    }
+    final response = await _supabase
+        .from('profiles')
+        .select('*')
+        .or(filters.join(','))
+        .neq('id', currentUserId);
+
+    return List<Map<String, dynamic>>.from(response);
   }
 
   // ==================== CONTACTS ====================
@@ -132,23 +131,30 @@ class AuthService {
     if (userId == null) return [];
 
     try {
-      final contactsResponse = await _supabase
+      // final contactsResponse = await _supabase
+      //     .from('contacts')
+      //     .select('contact_id')
+      //     .eq('user_id', userId);
+
+      // if (contactsResponse.isEmpty) return [];
+
+      // final List<String> contactIds = contactsResponse
+      //     .map((e) => e['contact_id'] as String)
+      //     .toList();
+
+      // final profilesResponse = await _supabase
+      //     .from('profiles')
+      //     .select('contact:contact_id(*)')
+      //     .inFilter('id', contactIds);
+
+      // return List<Map<String, dynamic>>.from(profilesResponse);
+
+      final result = await _supabase
           .from('contacts')
-          .select('contact_id')
+          .select('contact:contact_id(*)') // Тепер працює!
           .eq('user_id', userId);
 
-      if (contactsResponse.isEmpty) return [];
-
-      final List<String> contactIds = contactsResponse
-          .map((e) => e['contact_id'] as String)
-          .toList();
-
-      final profilesResponse = await _supabase
-          .from('profiles')
-          .select('id, full_name, avatar_url, phone_number')
-          .inFilter('id', contactIds);
-
-      return List<Map<String, dynamic>>.from(profilesResponse);
+      return result.map((e) => e['contact'] as Map<String, dynamic>).toList();
     } catch (e) {
       log('getMyContacts error: $e');
       return [];
@@ -164,7 +170,7 @@ class AuthService {
         .from('profiles')
         .update({
           'full_name': fullName.trim().isEmpty ? null : fullName.trim(),
-          'phone_number': phone?.trim().isEmpty == true ? null : phone?.trim(),
+          'phone': phone?.trim().isEmpty == true ? null : phone?.trim(),
           'updated_at': DateTime.now().toIso8601String(),
         })
         .eq('id', userId);
@@ -257,7 +263,7 @@ class AuthService {
     String? phone,
   }) async {
     try {
-      final otpType = type == 'email' ? OtpType.email : OtpType.sms;
+      // final otpType = type == 'email' ? OtpType.email : OtpType.sms;
 
       final response = await _supabase.auth.verifyOTP(
         token: token,
